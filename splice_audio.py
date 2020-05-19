@@ -7,17 +7,18 @@ resources:
 Example usage:
 >> rm -r example_data/output_silences/cleanest_setup  & python splice_audio.py --silence-split -i example_data/cleanest_setup.weba
 or
->> rm -r example_data/output_subtitles/cleanest_setup & python splice_audio.py -i example_data/cleanest_setup.weba --subtitles example_data/cleanest_setup.srt
+>> rm -r example_data/LibriSpeech/output_subtitles & python splice_audio.py -i example_data/cleanest_setup.weba --subtitles example_data/cleanest_setup.srt
 
 """
 
 from argparse import ArgumentParser, FileType
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
-import os
 
+import os
 import tqdm
 
+from utils.argutils import print_args
 
 
 def splice_using_silences(args):
@@ -32,12 +33,12 @@ def splice_using_silences(args):
     )
 
     filename = '.'.join(os.path.split(args.input)[-1].split('.')[:-1])
-    os.makedirs(os.path.join(args.out, filename), exist_ok=True)
+    out_parent_dir = os.path.join(args.out, filename)
+    os.makedirs(out_parent_dir, exist_ok=True)
 
     for i, chunk in enumerate(audio_chunks):
-        out_file = os.path.join(os.path.join(args.out, filename), f"{filename}_{i}.{args.out_fmt}")
-        print("exporting", out_file)
-        chunk.export(out_file, format=args.out_fmt)
+        fmt_out_file = os.path.join(out_parent_dir, f"{out_parent_dir}-{filename}-{i:04d}.{args.out_fmt}")
+        chunk.export(fmt_out_file, format=args.out_fmt)
 
 
 def splice_using_subtitles(args):
@@ -46,25 +47,30 @@ def splice_using_subtitles(args):
     parser, splicer = Parser(args.subtitles), Splicer(args.input)
 
     dialogues = parser.get_dialogues()
-    audio = AudioSegment.from_file(splicer.audio)
 
     filename = '.'.join(os.path.split(args.input)[-1].split('.')[:-1])
-    os.makedirs(os.path.join(args.out, filename), exist_ok=True)
+    out_dir = os.path.join(args.out, filename)
+    os.makedirs(out_dir, exist_ok=True)
+    out_parent_dir = os.path.split(args.out)[-1]
 
-    with open(os.path.join(os.path.join(args.out, filename), f'{args.speaker_id}-{args.clip_id}.trans.txt') , 'w') as ftrans:
+    print('filename:', os.path.join(out_dir, f'{out_parent_dir}-{filename}.trans.txt'))
+
+    audio = AudioSegment.from_file(splicer.audio)
+    with open(os.path.join(out_dir, f'{out_parent_dir}-{filename}.trans.txt') , 'w') as ftrans:
         for i, dialogue in enumerate(tqdm.tqdm(dialogues)):
-            start, end = dialogue.start, dialogue.end
+            start, end = dialogue.start, dialogue.end + 200 # extend an extra 200 ms
             # duration = end-start
-            chunk = audio[start: end + 200]
+            
+            chunk = audio[start: end]
 
             # TODO: join short audio
 
-            # out_file = os.path.join(os.path.join(args.out, filename), f"_{i}_'{slugify('_'.join(dialogue.text.split(' ')))}'.{args.out_fmt}")
+            # out_file = os.path.join(out_parent_dir, f"_{i}_'{slugify('_'.join(dialogue.text.split(' ')))}'.{args.out_fmt}")
             # chunk.export(out_file, format=args.out_fmt)
-            ftrans.write(f'{args.speaker_id}-{args.clip_id}-{i:04d} {dialogue.text.upper()}\n')
+            ftrans.write(f'{out_parent_dir}-{filename}-{i:04d} {dialogue.text.upper()}\n')
 
             # formatted outfile
-            fmt_out_file = os.path.join(os.path.join(args.out, filename), f"{args.speaker_id}-{args.clip_id}-{i:04d}.{args.out_fmt}")
+            fmt_out_file = os.path.join(out_dir, f"{out_parent_dir}-{filename}-{i:04d}.{args.out_fmt}")
             chunk.export(fmt_out_file, format=args.out_fmt)
 
 
@@ -72,8 +78,8 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Given a single sound file, tries to split it to words")
     parser.add_argument('-i', '--input', metavar='AUDIO_INPUT',
                     help='audio file input path')
-    parser.add_argument('-o', '--out', metavar='OUT', default='$INPUT$/output_$ACTION$',
-                    help='output directory path. Default=$INPUT$/output_$ACTION$ meaning the input directory.'
+    parser.add_argument('-o', '--out', metavar='OUT', default='$INPUT$/LibriSpeech/output_$ACTION$/0',
+                    help='output directory path. Default=$INPUT$/LibriSpeech/output_$ACTION$/0 meaning the input directory.'
                     '$ACTION$ means "silences", or "subtitles"')
 
     # the action: either split based on .rst file, or split based on audio only
@@ -93,18 +99,11 @@ if __name__ == "__main__":
 
     parser.add_argument('-f', '--out-fmt', metavar='FILE_EXT', default='flac',
                     help='output file extension {mp3, wav, flac, ...}')
-    parser.add_argument('--speaker-id', metavar='NUMBER', default=0,
-                    help='ID of the speaker clip')
-    parser.add_argument('--clip-id', metavar='NUMBER', default=0,
-                    help='ID of the source clip')
 
     args = parser.parse_args()
     args.out = args.out.replace('$INPUT$', os.path.join(*os.path.split(args.input)[:-1]))
     args.out = args.out.replace('$ACTION$', 'silences' if args.silence_split else 'subtitles')
-    # args.out = os.path.abspath(args.out)
-    # args.input = os.path.abspath(args.input)
-    print('args.out', args.out)
-    
+
     os.makedirs(args.out, exist_ok=True)
 
     if args.silence_split:
@@ -113,3 +112,5 @@ if __name__ == "__main__":
     else:
         print('splicing words using subtitles')
         splice_using_subtitles(args)
+
+    print('saved to output directory:', args.out)
