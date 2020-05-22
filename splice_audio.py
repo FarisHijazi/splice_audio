@@ -13,7 +13,7 @@ or
 
 from argparse import ArgumentParser, FileType
 from pydub import AudioSegment
-from pydub.silence import split_on_silence
+from pydub.silence import split_on_silence, detect_leading_silence, detect_nonsilent
 
 import os
 import tqdm
@@ -21,13 +21,20 @@ import tqdm
 from utils.argutils import print_args
 
 
-def splice_using_silences(args):
-    sound_file = AudioSegment.from_file(args.input)
+def splice_using_silences(input, out, silence_thresh=500, min_silence_len=-50,
+                          out_fmt='flac'):
+
+    filename = '.'.join(os.path.split(input)[-1].split('.')[:-1])
+    out_dir = os.path.join(out, filename)
+    os.makedirs(out_dir, exist_ok=True)
+    out_parent_dir = os.path.split(out)[-1]
+    
+    sound_file = AudioSegment.from_file(input)
     audio_chunks = split_on_silence(sound_file, 
         # must be silent for at least half a second
-        min_silence_len=args.min_silence_len,
+        min_silence_len=min_silence_len,
         # consider it silent if quieter than -16 dBFS
-        silence_thresh=args.silence_thresh,
+        silence_thresh=silence_thresh,
         keep_silence=1000,
         seek_step=1,
     )
@@ -37,80 +44,95 @@ def splice_using_silences(args):
     os.makedirs(out_parent_dir, exist_ok=True)
 
     for i, chunk in enumerate(audio_chunks):
-        fmt_out_file = os.path.join(out_parent_dir, f"{out_parent_dir}-{filename}-{i:04d}.{args.out_fmt}")
-        chunk.export(fmt_out_file, format=args.out_fmt)
+        fmt_out_file = os.path.join(out_dir, f"{out_parent_dir}-{filename}-{i:04d}.{out_fmt}")
+        chunk.export(fmt_out_file, format=out_fmt)
 
 
-def splice_using_subtitles(args):
+def splice_using_subtitles(input, out, subtitles, silence_thresh=500, min_silence_len=-50,
+                           out_fmt='flac'):
     from subs_audio_splicer import Splicer, Parser
     from slugify import slugify
-    parser, splicer = Parser(args.subtitles), Splicer(args.input)
+    parser, splicer = Parser(subtitles), Splicer(input)
 
     dialogues = parser.get_dialogues()
 
-    filename = '.'.join(os.path.split(args.input)[-1].split('.')[:-1])
-    out_dir = os.path.join(args.out, filename)
+    filename = '.'.join(os.path.split(input)[-1].split('.')[:-1])
+    out_dir = os.path.join(out, filename)
     os.makedirs(out_dir, exist_ok=True)
-    out_parent_dir = os.path.split(args.out)[-1]
+    out_parent_dir = os.path.split(out)[-1]
 
     print('filename:', os.path.join(out_dir, f'{out_parent_dir}-{filename}.trans.txt'))
 
     audio = AudioSegment.from_file(splicer.audio)
     with open(os.path.join(out_dir, f'{out_parent_dir}-{filename}.trans.txt') , 'w') as ftrans:
         for i, dialogue in enumerate(tqdm.tqdm(dialogues)):
-            start, end = dialogue.start, dialogue.end + 200 # extend an extra 200 ms
+            next_start = dialogues[i+1].start if i < len(dialogues)-1 else 999999999999999
+            start, end = dialogue.start, min(next_start, dialogue.end)
             # duration = end-start
-            
             chunk = audio[start: end]
 
-            # TODO: join short audio
+            # removing leading and trailing silences
+            start_trim = detect_leading_silence(chunk, silence_threshold=silence_thresh)
+            end_trim = detect_leading_silence(chunk.reverse(), silence_threshold=silence_thresh)
+            chunk = chunk[start_trim:len(chunk)-end_trim]
+            # remove silences
+            # chunk = remove_silences(chunk, min_silence_len, silence_thresh)
 
-            # out_file = os.path.join(out_parent_dir, f"_{i}_'{slugify('_'.join(dialogue.text.split(' ')))}'.{args.out_fmt}")
-            # chunk.export(out_file, format=args.out_fmt)
             ftrans.write(f'{out_parent_dir}-{filename}-{i:04d} {dialogue.text.upper()}\n')
 
             # formatted outfile
+            fmt_out_file = os.path.join(out_dir, f"{out_parent_dir}-{filename}-{i:04d}.{out_fmt}")
+            chunk.export(fmt_out_file, format=out_fmt)
+
             fmt_out_file = os.path.join(out_dir, f"{out_parent_dir}-{filename}-{i:04d}.{args.out_fmt}")
             chunk.export(fmt_out_file, format=args.out_fmt)
+
 
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Given a single sound file, tries to split it to words")
     parser.add_argument('-i', '--input', metavar='AUDIO_INPUT',
                     help='audio file input path')
-    parser.add_argument('-o', '--out', metavar='OUT', default='$INPUT$/LibriSpeech/output_$ACTION$/0',
-                    help='output directory path. Default=$INPUT$/LibriSpeech/output_$ACTION$/0 meaning the input directory.'
+    parser.add_argument('-o', '--out', metavar='OUT', default='$INPUT$/LibriSpeech/train-clean-100/0',
+                    help='output directory path.'\
+                    'Default=$INPUT$/LibriSpeech/train-clean-100/0 meaning the input directory.'
                     '$ACTION$ means "silences", or "subtitles"')
 
     # the action: either split based on .rst file, or split based on audio only
     actions_group = parser.add_mutually_exclusive_group(required=True)
     # read .rst file
-    actions_group.add_argument('-s', '--silence-split', action='store_true',
-                    help='split words based on silences. Can specify --min-silence-len and --silence-thresh')
+    actions_group.add_argument('-s', '--silence_split', action='store_true',
+                    help='split words based on silences.'\
+                        'Can specify --min_silence_len and --silence_thresh')
     actions_group.add_argument('-b', '--subtitles', metavar='SUBTITLES',
                     help='split audio based on subtitle times from the passed .rst/.ass file')
+    # actions_group.add_argument(title='split words', 
+    #                 description='split audio based on words based on silences,'\
+    #                     'affected by --min_silence_len and --silence_thresh')
 
-    split_words_group = actions_group.add_argument_group(title='split words', 
-                    description='split audio based on words based on silences, must specify --min-silence-len and --silence-thresh')
-    split_words_group.add_argument('-msl', '--min-silence-len', default=500, 
+    parser.add_argument('-msl', '--min_silence_len', default=500, type=float,
                     help='must be silent for at least MIN_SILENCE_LEN (ms)')
-    split_words_group.add_argument('-st', '--silence-thresh', default=-16, 
+    parser.add_argument('-st', '--silence_thresh', default=-50,  type=float,
                     help='consider it silent if quieter than SILENCE_THRESH dBFS')
-
+    parser.add_argument('--out_fmt', metavar='FILE_EXT', default='flac',
+                    help='output file extension {mp3, wav, flac, ...}')
+    
     parser.add_argument('-f', '--out-fmt', metavar='FILE_EXT', default='flac',
                     help='output file extension {mp3, wav, flac, ...}')
 
     args = parser.parse_args()
     args.out = args.out.replace('$INPUT$', os.path.join(*os.path.split(args.input)[:-1]))
+    args.out = args.out.replace('$ACTION$', 'output_silences' if args.silence_split else 'output_subtitles')
+
     args.out = args.out.replace('$ACTION$', 'silences' if args.silence_split else 'subtitles')
 
     os.makedirs(args.out, exist_ok=True)
 
     if args.silence_split:
         print('using splicing words using silences')
-        splice_using_silences(args)
+        splice_using_silences(**vars(args))
     else:
         print('splicing words using subtitles')
-        splice_using_subtitles(args)
+        splice_using_subtitles(**vars(args))
 
     print('saved to output directory:', args.out)
