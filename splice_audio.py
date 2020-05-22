@@ -5,10 +5,12 @@ resources:
 [](https://stackoverflow.com/a/23747395/7771202)
 
 Example usage:
->> rm -r example_data/output_silences/cleanest_setup  & python splice_audio.py --silence-split -i example_data/cleanest_setup.weba
-or
->> rm -r example_data/LibriSpeech/output_subtitles & python splice_audio.py -i example_data/cleanest_setup.weba --subtitles example_data/cleanest_setup.srt
+```
+$ python splice_audio.py -f --silence_split -i example_data/cleanest_setup.wav
+# or
+$ python splice_audio.py -f -i example_data/cleanest_setup.wav --subtitles example_data/cleanest_setup.srt
 
+```
 """
 
 from argparse import ArgumentParser, FileType
@@ -117,14 +119,24 @@ if __name__ == "__main__":
     parser.add_argument('--out_fmt', metavar='FILE_EXT', default='flac',
                     help='output file extension {mp3, wav, flac, ...}')
     
-    parser.add_argument('-f', '--out-fmt', metavar='FILE_EXT', default='flac',
-                    help='output file extension {mp3, wav, flac, ...}')
+    parser.add_argument('-f', '--force', action='store_true',
+                    help='Overwrite if output already exists')
 
     args = parser.parse_args()
     args.out = args.out.replace('$INPUT$', os.path.join(*os.path.split(args.input)[:-1]))
     args.out = args.out.replace('$ACTION$', 'output_silences' if args.silence_split else 'output_subtitles')
 
-    args.out = args.out.replace('$ACTION$', 'silences' if args.silence_split else 'subtitles')
+    # if output already exists, check user or check if forced
+    if os.path.isdir(args.out):
+        if args.force or input(f'overwrite "{args.out}"? [yes/(N)o]').lower() in ['y', 'yes']:
+            print('deleting', args.out)
+            import shutil
+            shutil.rmtree(args.out)
+        else:
+            print('exiting')
+            exit(0)
+    else:
+        os.makedirs(args.out)
 
     os.makedirs(args.out, exist_ok=True)
 
