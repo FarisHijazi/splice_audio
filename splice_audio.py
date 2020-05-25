@@ -24,7 +24,7 @@ from utils.argutils import print_args
 
 
 def splice_using_silences(input, out, silence_thresh=500, min_silence_len=-50,
-                          out_fmt='flac'):
+                          out_fmt='flac', **kwargs):
 
     filename = '.'.join(os.path.split(input)[-1].split('.')[:-1])
     out_dir = os.path.join(out, filename)
@@ -51,12 +51,17 @@ def splice_using_silences(input, out, silence_thresh=500, min_silence_len=-50,
 
 
 def splice_using_subtitles(input, out, subtitles, silence_thresh=500, min_silence_len=-50,
-                           out_fmt='flac'):
+                           out_fmt='flac', subtitle_rescale=1.0, **kwargs):
     from subs_audio_splicer import Splicer, Parser
     from slugify import slugify
     parser, splicer = Parser(subtitles), Splicer(input)
 
     dialogues = parser.get_dialogues()
+
+    # in the case of a speedup factor, change the subtitle times
+    for dialogue in dialogues:
+        dialogue.start = dialogue.start / subtitle_rescale
+        dialogue.end = dialogue.end / subtitle_rescale
 
     filename = '.'.join(os.path.split(input)[-1].split('.')[:-1])
     out_dir = os.path.join(out, filename)
@@ -108,10 +113,10 @@ if __name__ == "__main__":
                         'Can specify --min_silence_len and --silence_thresh')
     actions_group.add_argument('-b', '--subtitles', metavar='SUBTITLES',
                     help='split audio based on subtitle times from the passed .rst/.ass file')
-    # actions_group.add_argument(title='split words', 
-    #                 description='split audio based on words based on silences,'\
-    #                     'affected by --min_silence_len and --silence_thresh')
 
+    parser.add_argument('--subtitle_rescale', default=1.0, type=float,
+                    help='rescale the timings if the audio was rescaled. default=1'\
+                        'If subtitle_rescale=2, then it will finish in half the original time.')
     parser.add_argument('-msl', '--min_silence_len', default=500, type=float,
                     help='must be silent for at least MIN_SILENCE_LEN (ms)')
     parser.add_argument('-st', '--silence_thresh', default=-50,  type=float,
