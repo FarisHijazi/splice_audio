@@ -100,10 +100,10 @@ if __name__ == "__main__":
     parser = ArgumentParser(description="Given a single sound file, tries to split it to words")
     parser.add_argument('-i', '--input', metavar='AUDIO_INPUT',
                     help='audio file input path')
-    parser.add_argument('-o', '--out', metavar='OUT', default='$INPUT$/LibriSpeech/train-clean-100/0',
+    parser.add_argument('-o', '--out', metavar='OUT', default='$INPUT$/LibriSpeech/train-clean-100-$ACTION$/0',
                     help='output directory path.'\
-                    'Default=$INPUT$/LibriSpeech/train-clean-100/0 meaning the input directory.'
-                    '$ACTION$ means "silences", or "subtitles"')
+                    'Default=$INPUT$/LibriSpeech/train-clean-100-$ACTION$/0 meaning the input directory.'
+                    '$ACTION$ means "sil" (silences), or "sub" (subtitles)')
 
     # the action: either split based on .rst file, or split based on audio only
     actions_group = parser.add_mutually_exclusive_group(required=True)
@@ -129,7 +129,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     args.out = args.out.replace('$INPUT$', os.path.join(*os.path.split(args.input)[:-1]))
-    args.out = args.out.replace('$ACTION$', 'output_silences' if args.silence_split else 'output_subtitles')
+    args.out = args.out.replace('$ACTION$', 'sil' if args.silence_split else 'sub')
 
     # if output already exists, check user or check if forced
     if os.path.isdir(args.out):
