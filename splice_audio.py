@@ -17,15 +17,15 @@ $ python splice_audio.py -i "data/$audioname.wav" --out="\$INPUT\$/LibriSpeech/t
 ```
 """
 
+
 import os
-from argparse import ArgumentParser
+import sys
+import argparse
 
 from tqdm import tqdm
 from pydub import AudioSegment
-from pydub.silence import split_on_silence, detect_leading_silence, detect_nonsilent
 from pathlib import Path
 
-from utils.argutils import print_args
 
 
 def _force_short_chunks(audio_chunks, max_len=15000, min_silence_len=100, silence_thresh=-50.0, scaledown=0.9) -> list:
@@ -53,7 +53,7 @@ def _force_short_chunks(audio_chunks, max_len=15000, min_silence_len=100, silenc
                     )
                     short_chunks += _force_short_chunks(subsplits, max_len, min_silence_len, silence_thresh)
                     break
-                except UnboundLocalError as e:
+                except UnboundLocalError:
                     local_min_silence_len = int(round(local_min_silence_len * scaledown))
                     local_silence_thresh = local_silence_thresh * scaledown
                     pbar.set_description(f'scaling down min_silence_len={local_min_silence_len:.5f}, '
@@ -222,70 +222,140 @@ def _remove_silences(sound: AudioSegment, min_silence_len=50, silence_thresh=Non
 
 
 if __name__ == "__main__":
-    parser = ArgumentParser(
-        description='Given a single sound file, tries to split it to segments.'
-                    'This is a preprocessing step for speech datasets (specifically LibriSpeech).'
-                    'It can split on silences or split using a subtitles file. and will generate a ".trans.txt" file')
+    try:
+        import gooey
+    except ImportError:
+        gooey = None
 
-    parser.add_argument('-i', '--input', metavar='INPUT_AUDIO', type=Path,
-                        help='audio file input path')
-    parser.add_argument('-o', '--out', metavar='OUT_FOLDER', type=Path,
-                        default='$INPUT$/LibriSpeech/train-clean-100-$ACTION$/0',
-                        help='output directory path. '
-                             'Default="$INPUT$/LibriSpeech/train-clean-100-$ACTION$/0". '
-                             '$INPUT$ means the input directory. '
-                             '$ACTION$ means "sil" (silences), or "sub" (subtitles)')
 
-    # the action: either split based on .rst file, or split based on audio only
-    group_subtitles = parser.add_argument_group('Subtitles')
-    # read .rst file
-    group_subtitles.add_argument('-b', '--subtitles', metavar='SUBTITLES_FILE', type=Path,
-                                 help='split audio based on subtitle times from the passed .rst/.ass file'
-                                      'If not passed, will split words based on silences. '
-                                      'Can specify --min_silence_len and --silence_thresh')
-    group_subtitles.add_argument('--subtitle_end_offset', default=100, type=int,
-                                 help='add delay at end of subtitle dialogue (milliseconds). '
-                                      'If the audio segments say more than the text, then make this smaller. '
-                                      'Default=100')
+    def flex_add_argument(f):
+        """Make the add_argument accept (and ignore) the widget option."""
 
-    group_subtitles.add_argument('--subtitle_rescale', default=1.0, type=float,
-                                 help='rescale the timings if the audio was rescaled.'
-                                      'If subtitle_rescale=2, then it will finish in half the original time. '
-                                      'Default=1')
+        def f_decorated(*args, **kwargs):
+            kwargs.pop('widget', None)
+            kwargs.pop('gooey_options', None)
+            return f(*args, **kwargs)
 
-    group_silences = parser.add_argument_group('Silences')
-    group_silences.add_argument('--min_silence_len', default=500, type=int,
-                                help='must be silent for at least MIN_SILENCE_LEN (ms) to count as a silence. '
-                                     'Default=500')
-    group_silences.add_argument('--silence_thresh', default=-50, type=float,
-                                help='consider it silent if quieter than SILENCE_THRESH dBFS. '
-                                     'Default=-50')
+        return f_decorated
 
-    parser.add_argument('--min_len', default=7000, type=int,
-                        help='minimum length for each segment in ms. '
-                             'Default=7000.')
-    parser.add_argument('--max_len', default=15000, type=int,
-                        help='maximum length for each segment in ms. '
-                             'Default=15000.')
 
-    parser.add_argument('--out_fmt', metavar='FILE_EXT', default='flac',
-                        help='output file extension {mp3, wav, flac, ...}')
+    # Monkey-patching a private class…
+    argparse._ActionsContainer.add_argument = flex_add_argument(argparse.ArgumentParser.add_argument)
 
-    parser.add_argument('-f', '--force', action='store_true',
-                        help='Overwrite if output already exists')
-    # parser.add_argument("--hparams", type=str, default="", help=\
-    #     "Hyperparameter overrides as a comma-separated list of name-value pairs")
+    # Do not run GUI if it is not available or if command-line arguments are given.
+    if gooey is None or len(sys.argv) > 1:
+        ArgumentParser = argparse.ArgumentParser
 
-    args = parser.parse_args()
+
+        def gui_decorator(f):
+            return f
+    else:
+        print('Using Gooey')
+        ArgumentParser = gooey.GooeyParser
+        gui_decorator = gooey.Gooey(
+            program_name='Audio splicer',
+            progress_regex=r"(\d+)%",
+            navigation='TABBED',
+            suppress_gooey_flag=True,
+        )
+        # in gooey mode, --force is always set
+        sys.argv.append('--force')
+
+
+    @gui_decorator
+    def get_parser():
+        parser = ArgumentParser(
+            description='Given a single sound file, tries to split it to segments.'
+                        'This is a preprocessing step for speech datasets (specifically LibriSpeech).'
+                        'It can split on silences or using a subtitles file. And will generate a ".trans.txt" file.'
+                        'Note that it is advised to have 16000Hz audio files as input.'
+                        'Gooey GUI is used if it is installed and no arguments are passed.')
+
+        parser.add_argument('-i', '--input', metavar='INPUT_AUDIO', type=Path, widget='FileChooser', required=True,
+                            gooey_options={
+                                'validator': {
+                                    'test': 'user_input != None',
+                                    'message': 'Choose a valid path (file not found)'
+                                }
+                            },
+                            help='audio file input path')
+        parser.add_argument('-o', '--out', metavar='OUT_FOLDER', type=Path, widget='DirChooser',
+                            default='$INPUT$/splits-$ACTION$/',
+                            gooey_options={
+                                'validator': {
+                                    'test': 'user_input != None',
+                                    'message': 'Choose a valid directory path'
+                                }
+                            },
+                            help='output directory path. '
+                                 'Default="$INPUT$/splits-$ACTION$/". '
+                                 '$INPUT$ means the input directory. '
+                                 '$ACTION$ means "sil" (silences), or "sub" (subtitles)')
+
+        # the action: either split based on .rst file, or split based on audio only
+        group_subtitles = parser.add_argument_group('Subtitles')
+        # read .rst file
+        group_subtitles.add_argument('-b', '--subtitles', metavar='SUBTITLES_FILE', type=Path,
+                                     widget='FileChooser',
+                                     gooey_options={'validator': {
+                                         'test': 'user_input != None',
+                                         'message': 'Choose a valid path'
+                                     }},
+                                     help='split audio based on subtitle times from the passed .rst/.ass file'
+                                          'If not passed, will split words based on silences. '
+                                          'Can specify --min_silence_len and --silence_thresh')
+        group_subtitles.add_argument('--subtitle_end_offset', default=100, type=int,
+                                     help='add delay at end of subtitle dialogue (milliseconds). '
+                                          'If the audio segments say more than the text, then make this smaller. '
+                                          'Default=100')
+
+        group_subtitles.add_argument('--subtitle_rescale', default=1.0, type=float,
+                                     help='rescale the timings if the audio was rescaled.'
+                                          'If subtitle_rescale=2, then it will finish in half the original time. '
+                                          'Default=1')
+
+        group_silences = parser.add_argument_group('Silences')
+        group_silences.add_argument('-sl', '--min_silence_len', default=500, type=int,
+                                    help='must be silent for at least MIN_SILENCE_LEN (ms) to count as a silence. '
+                                         'Default=500')
+        group_silences.add_argument('-st', '--silence_thresh', default=-50, type=float,
+                                    help='consider it silent if quieter than SILENCE_THRESH dBFS. '
+                                         'Default=-50')
+
+        parser.add_argument('--min_len', default=8000, type=int,
+                            help='minimum length for each segment in ms. '
+                                 'Default=8000.')
+        parser.add_argument('--max_len', default=10000, type=int,
+                            help='maximum length for each segment in ms. '
+                                 'Default=10000.')
+
+        parser.add_argument('--out_fmt', metavar='FILE_EXT', default='flac',
+                            help='output file extension {mp3, wav, flac, ...}')
+
+        parser.add_argument('-f', '--force', action='store_true',
+                            help='Overwrite if output already exists')
+        return parser
+
+
+    parser = get_parser()
+
+    args = parser.parse_args(sys.argv[1:])
     args.out = Path(
         args.out.as_posix()
             .replace('$INPUT$', os.path.join(*os.path.split(args.input)[:-1]))
             .replace('$ACTION$', 'sub' if args.subtitles else 'sil')
     )
 
-    print_args(args)
+    try:
+        from utils.argutils import print_args
+
+        print_args(args)
+    except:
+        pass
+
     # if output already exists, check user or check if forced
     if args.out.is_dir():
+        print(f'{args.out} already exists, choose the "force" option to overwrite it.')
         if args.force or input(f'overwrite "{args.out}"? [yes/(N)o]').lower() in ['y', 'yes']:
             print('DELETING', args.out)
             import shutil
