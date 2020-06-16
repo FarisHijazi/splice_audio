@@ -585,8 +585,10 @@ if __name__ == "__main__":
     else:
         args.out.mkdir(parents=True, exist_ok=True)
 
-    # from synthesizer.hparams import hparams
-    # args.hparams = hparams.parse(args.hparams)
+    try:
+        _check_samplerate(args)
+    except Exception as e:
+        print('Warning: Could not check sample using ffmpeg', e)
 
     if args.subtitles and args.subtitles.exists():
         print('splicing using subtitles')
