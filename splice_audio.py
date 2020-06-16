@@ -1,8 +1,7 @@
 """
-this is just to automate
-resources:
+this is just to automate splicing (splitting audio on silences or)
+resources: [](https://stackoverflow.com/a/23747395/7771202)
 
-[](https://stackoverflow.com/a/23747395/7771202)
 
 Example usage:
 ```
@@ -13,18 +12,21 @@ $ python splice_audio.py -f -i data/my_audio.wav --subtitles data/my_subtitles.s
 
 more extensive example: (assumes you have $audioname and $name defined)
 
-$ python splice_audio.py -i "data/$audioname.wav" --out="\$INPUT\$/LibriSpeech/train-$name/0" --subtitles="data/$audioname.srt" --subtitle_end_offset=200 --subtitle_rescale=1
+$ python splice_audio.py -i "data/$audioname.wav" --out="<INPUT>/LibriSpeech/train-$name/0" --subtitles="data/$audioname.srt" --subtitle_end_offset=200 --subtitle_rescale=1
 ```
 """
 
-
-import os
-import sys
 import argparse
-
-from tqdm import tqdm
-from pydub import AudioSegment
+import itertools
+import os
+import re
+import subprocess
+import sys
 from pathlib import Path
+
+from pydub import AudioSegment
+from pydub.utils import db_to_float
+from tqdm import tqdm
 
 
 
@@ -42,7 +44,7 @@ def _force_short_chunks(audio_chunks, max_len=15000, min_silence_len=100, silenc
             # keep trying to split, 100 times
             for _ in range(100):
                 try:
-                    pbar.set_description(f'force_short_chunks({len(audio_chunk)/1000:.2f}sec)')
+                    pbar.set_description(f'force_short_chunks({len(audio_chunk) / 1000:.2f}sec)')
                     # this thing might raise an error
                     subsplits = split_on_silence(
                         audio_chunk,
@@ -96,15 +98,13 @@ def _merge_short_segments_to_range(audio_chunks, min_len, max_len):
             if not (subchunks_len <= max_len):
                 pbar.set_description(f'\rthrow chunk of length {subchunks_len}')
                 break
-            elif combined_len <= max_len:  # if can merge more
+            else:  # if can merge more
                 pbar.set_description('\rappended chunk {} \t to chunks \t[{}]=\t{}'.format(
                     len(next_chunk),
                     '+'.join(list(map(str, map(len, subchunks)))),
                     combined_len + len(next_chunk),
                 ))
                 subchunks.append(next_chunk)
-            else:
-                break
         else:  # can't add more, just merge them and move on
             next_chunk = audio_chunks[i-1]
             subchunks_len = sum(list(map(len, subchunks)))
@@ -123,14 +123,15 @@ def _merge_short_segments_to_range(audio_chunks, min_len, max_len):
     return merged_chunks
 
 
-def splice_using_silences(input: Path, out: Path, silence_thresh=500, min_silence_len=-50,
-                          out_fmt='flac', min_len=7000, max_len=15000, **kwargs):
-    filename = '.'.join(input.name.split('.')[:-1])
-    out_dir = out.joinpath(filename)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_parent_dir = out.name
+def splice_using_silences(input: Path, out: Path, min_silence_len=500, silence_thresh=-16, out_fmt='flac', min_len=7000,
+                          max_len=15000, **kwargs):
+    filename = out.name
+    out_parent_dir = out.parent.name
+    out_dir = out
 
+    print('loading audio...')
     sound_file = AudioSegment.from_file(input)
+    print('spitting...')
     audio_chunks = split_on_silence(
         sound_file,
         # must be silent for at least half a second
@@ -139,6 +140,7 @@ def splice_using_silences(input: Path, out: Path, silence_thresh=500, min_silenc
         silence_thresh=silence_thresh,
         keep_silence=1000,
         seek_step=1,
+        disable_tqdm=False,
     )
 
     print('force_short_chunks()')
@@ -151,54 +153,70 @@ def splice_using_silences(input: Path, out: Path, silence_thresh=500, min_silenc
     lens = list(map(len, merged_chunks))
     print(f'Total_trimmed / total_original: {sum(lens)}/{original_len} = {sum(lens) / original_len * 100:.2f}%')
 
-    for i, chunk in enumerate(merged_chunks):
-        fmt_out_file = out_dir.joinpath(f"{out_parent_dir}-{filename}-{i:04d}.{out_fmt}")
-        chunk.export(fmt_out_file, format=out_fmt)
+    with out_dir.joinpath(f'{out_parent_dir}-{filename}.trans.txt').open(mode='w') as ftrans:
+        for i, chunk in enumerate(merged_chunks):
+            fmt_out_file = out_dir.joinpath(f"{out_parent_dir}-{filename}-{i:04d}.{out_fmt}")
+            if not (min_len >= len(chunk) <= max_len):
+                not_in_range = fmt_out_file.parent.joinpath('not_in_range')
+                not_in_range.mkdir(exist_ok=True)
+                fmt_out_file = not_in_range.joinpath(fmt_out_file.name)
+
+            chunk.export(fmt_out_file, format=out_fmt)
+            text = ''
+            ftrans.write(f'{out_parent_dir}-{filename}-{i:04d} {text}\n')
 
 
-def splice_using_subtitles(input: Path, out: Path, subtitles: Path, silence_thresh=500, min_silence_len=-50,
-                           out_fmt='flac', subtitle_rescale=1.0, subtitle_end_offset=400, **kwargs):
+def splice_using_subtitles(input: Path, out: Path, subtitles: Path, min_silence_len=500, silence_thresh=-16,
+                           out_fmt='flac', subtitle_rescale=1.0, subtitle_end_offset=400, min_len=7000,
+                           max_len=15000, **kwargs):
     from subs_audio_splicer import Splicer, Parser
     parser_, splicer = Parser(subtitles.as_posix()), Splicer(input.as_posix())
-    dialogues = parser_.get_dialogues()
+    dialogues = [dialogue for dialogue in parser_.get_dialogues() if dialogue.text]
 
     # in the case of a speedup factor, change the subtitle times
     for dialogue in dialogues:
-        dialogue.start = dialogue.start / subtitle_rescale
-        dialogue.end = dialogue.end / subtitle_rescale
+        dialogue.start = int(round(dialogue.start / subtitle_rescale))
+        dialogue.end = int(round(dialogue.end / subtitle_rescale))
+        dialogue.text = re.sub(r'\s+', ' ', re.sub(r"[^a-zA-z']", ' ', dialogue.text)).strip()
 
-    filename = '.'.join(input.name.split('.')[:-1])
-    out_dir = out.joinpath(filename)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_parent_dir = out.name
+    for i, dialogue in enumerate(dialogues):
+        next_start = dialogues[i + 1].start if i < len(dialogues) - 1 else 999999999999999
+        dialogue.start, dialogue.end = dialogue.start, min(next_start, dialogue.end) + subtitle_end_offset
+
+    filename = out.name
+    out_parent_dir = out.parent.name
+    out_dir = out
 
     print('filename:', out_dir.joinpath(f'{out_parent_dir}-{filename}.trans.txt'))
     length = 0
 
     audio = AudioSegment.from_file(splicer.audio)
-    with open(out_dir.joinpath(f'{out_parent_dir}-{filename}.trans.txt').as_posix(), 'w') as ftrans:
+
+    dialogues = _merge_short_segments_to_range(dialogues, min_len, max_len)
+    lens = sum(list(map(len, dialogues)))
+    print(
+        f'\nafter merge chunks: all dialogues  / total_original: {lens}/{len(audio)} = {lens / len(audio) * 100:.2f}% kept')
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with out_dir.joinpath(f'{out_parent_dir}-{filename}.trans.txt').open(mode='w') as ftrans:
         pbar = tqdm(dialogues)
         for i, dialogue in enumerate(pbar):
             next_start = dialogues[i + 1].start if i < len(dialogues) - 1 else 999999999999999
             # next_end = dialogues[i + 1].end if i < len(dialogues) - 1 else 0
             # nextnext_end = dialogues[i + 2].end if i < len(dialogues) - 2 else 0
-            if not dialogue.text:
-                continue
+            # start, end = dialogue.start, min(next_start, dialogue.end) + subtitle_end_offset
+            start, end = dialogue.start, dialogue.end
 
-            start, end = dialogue.start, min(next_start, dialogue.end) + subtitle_end_offset
             # duration = end-start
             chunk = audio[start: end]
 
-            # removing leading and trailing silences
-            start_trim = detect_leading_silence(chunk, silence_threshold=silence_thresh)
-            end_trim = detect_leading_silence(chunk.reverse(), silence_threshold=silence_thresh)
-            chunk = chunk[start_trim:len(chunk) - end_trim]
-            pbar.set_description(f"striping silences in range ({start_trim}, {end_trim})")
-            # remove silences
+            # remove silences for each chunk
+            chunk = remove_leading_and_trailing_silences(chunk, silence_thresh, keep_silence=50, pbar=pbar)
             chunk = _remove_silences(chunk, min_silence_len, silence_thresh)
             length += len(chunk)
 
-            ftrans.write(f'{out_parent_dir}-{filename}-{i:04d} {dialogue.text.upper()}\n')
+            text = dialogue.text.replace('\n', ' ').upper()
+            ftrans.write(f'{out_parent_dir}-{filename}-{i:04d} {text}\n')
 
             # formatted outfile
             fmt_out_file = out_dir.joinpath(f"{out_parent_dir}-{filename}-{i:04d}.{out_fmt}")
@@ -206,7 +224,19 @@ def splice_using_subtitles(input: Path, out: Path, subtitles: Path, silence_thre
     print(f'Segments have covered {(length / len(audio)) * 100:.2f}%')
 
 
-def _remove_silences(sound: AudioSegment, min_silence_len=50, silence_thresh=None):
+def remove_leading_and_trailing_silences(chunk, silence_thresh=-16, keep_silence=50, pbar=None):
+    # removing leading and trailing silences
+    start_trim = detect_leading_silence(chunk, silence_threshold=silence_thresh)
+    end_trim = len(chunk) - detect_leading_silence(chunk.reverse(), silence_threshold=silence_thresh)
+
+    chunk = chunk[max(0, start_trim - keep_silence): min(len(chunk), end_trim + keep_silence)]
+    if pbar is not None:
+        pbar.set_description(f"striping silences in range ({start_trim}, {end_trim})")
+    # remove silences
+    return chunk
+
+
+def _remove_silences(sound: AudioSegment, min_silence_len=500, silence_thresh=None):
     # https://stackoverflow.com/a/60212565
     non_sil_times = detect_nonsilent(
         sound,
@@ -275,12 +305,12 @@ if __name__ == "__main__":
                             gooey_options={
                                 'validator': {
                                     'test': 'user_input != None',
-                                    'message': 'Choose a valid path (file not found)'
+                                    'message': 'Choose a valid file path'
                                 }
                             },
                             help='audio file input path')
         parser.add_argument('-o', '--out', metavar='OUT_FOLDER', type=Path, widget='DirChooser',
-                            default='$INPUT$/splits-$ACTION$/',
+                            default='<INPUT>/splits-<ACTION>/',
                             gooey_options={
                                 'validator': {
                                     'test': 'user_input != None',
@@ -288,9 +318,9 @@ if __name__ == "__main__":
                                 }
                             },
                             help='output directory path. '
-                                 'Default="$INPUT$/splits-$ACTION$/". '
-                                 '$INPUT$ means the input directory. '
-                                 '$ACTION$ means "sil" (silences), or "sub" (subtitles)')
+                                 'Default="<INPUT>/splits-<ACTION>/". '
+                                 '<INPUT> means the input directory. '
+                                 '<ACTION> means "sil" (silences), or "sub" (subtitles)')
 
         # the action: either split based on .rst file, or split based on audio only
         group_subtitles = parser.add_argument_group('Subtitles')
@@ -315,19 +345,19 @@ if __name__ == "__main__":
                                           'Default=1')
 
         group_silences = parser.add_argument_group('Silences')
-        group_silences.add_argument('-sl', '--min_silence_len', default=500, type=int,
+        group_silences.add_argument('-sl', '--min_silence_len', default=700, type=int,
                                     help='must be silent for at least MIN_SILENCE_LEN (ms) to count as a silence. '
-                                         'Default=500')
+                                         'Default=700')
         group_silences.add_argument('-st', '--silence_thresh', default=-50, type=float,
                                     help='consider it silent if quieter than SILENCE_THRESH dBFS. '
                                          'Default=-50')
 
-        parser.add_argument('--min_len', default=8000, type=int,
+        parser.add_argument('--min_len', default=7000, type=int,
                             help='minimum length for each segment in ms. '
-                                 'Default=8000.')
-        parser.add_argument('--max_len', default=10000, type=int,
+                                 'Default=7000.')
+        parser.add_argument('--max_len', default=13000, type=int,
                             help='maximum length for each segment in ms. '
-                                 'Default=10000.')
+                                 'Default=13000.')
 
         parser.add_argument('--out_fmt', metavar='FILE_EXT', default='flac',
                             help='output file extension {mp3, wav, flac, ...}')
@@ -342,8 +372,11 @@ if __name__ == "__main__":
     args = parser.parse_args(sys.argv[1:])
     args.out = Path(
         args.out.as_posix()
-            .replace('$INPUT$', os.path.join(*os.path.split(args.input)[:-1]))
-            .replace('$ACTION$', 'sub' if args.subtitles else 'sil')
+            .replace('<INPUT>', os.path.join(*os.path.split(args.input)[:-1]))
+            .replace('<ACTION>', 'sub' if args.subtitles else 'sil')
+    ).joinpath(
+        # filename
+        '.'.join(args.input.name.split('.')[:-1])
     )
 
     try:
