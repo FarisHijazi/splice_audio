@@ -27,6 +27,7 @@ from pathlib import Path
 from pydub import AudioSegment
 from pydub.utils import db_to_float
 from tqdm import tqdm
+import json
 
 
 # === pydub function ===
@@ -116,7 +117,7 @@ def detect_nonsilent(audio_segment, min_silence_len=1000, silence_thresh=-16, se
 
 
 def split_on_silence(audio_segment, min_silence_len=1000, silence_thresh=-16, keep_silence=100,
-                     seek_step=1, disable_tqdm=True):
+                     seek_step=1, disable_tqdm=True, output_ranges=None):
     """
     audio_segment - original pydub.AudioSegment() object
 
@@ -146,7 +147,7 @@ def split_on_silence(audio_segment, min_silence_len=1000, silence_thresh=-16, ke
     if isinstance(keep_silence, bool):
         keep_silence = len(audio_segment) if keep_silence else 0
 
-    output_ranges = [
+    output_ranges = output_ranges or [
         [start - keep_silence, end + keep_silence]
         for (start, end)
         in detect_nonsilent(audio_segment, min_silence_len, silence_thresh, seek_step, disable_tqdm=disable_tqdm)
@@ -160,9 +161,9 @@ def split_on_silence(audio_segment, min_silence_len=1000, silence_thresh=-16, ke
             range_ii[0] = range_i[1]
 
     return [
-        audio_segment[max(start, 0): min(end, len(audio_segment))]
-        for start, end in output_ranges
-    ]
+               audio_segment[max(start, 0): min(end, len(audio_segment))]
+               for start, end in output_ranges
+           ], output_ranges
 
 
 def detect_leading_silence(sound, silence_threshold=-50.0, chunk_size=10):
@@ -242,12 +243,18 @@ def _check_samplerate(args):
             assert args.input.exists(), f'{args.input} does not exist! Failed to create 16Khz version'
 
 
-def _force_short_chunks(audio_chunks, max_len=15000, min_silence_len=500, silence_thresh=-16, scaledown=0.9) -> list:
+def _force_short_chunks(audio_chunks, max_len=15000, min_silence_len=500, silence_thresh=-16, scaledown=0.9,
+                        pbar=None) -> list:
     # ensure that all chunks are less than the max len:
     min_silence_len, silence_thresh = int(round(min_silence_len * scaledown)), silence_thresh * scaledown
     short_chunks = []
-    pbar = tqdm(audio_chunks, position=0, leave=False)
-    for audio_chunk in pbar:
+    if pbar is None:
+        pbar = tqdm(audio_chunks, position=0, leave=False, total=len(audio_chunks))
+    else:
+        pbar.total += len(audio_chunks)
+
+    for audio_chunk in audio_chunks:
+        pbar.update(1)
         if len(audio_chunk) < max_len:
             short_chunks.append(audio_chunk)
         else:
@@ -258,14 +265,14 @@ def _force_short_chunks(audio_chunks, max_len=15000, min_silence_len=500, silenc
                 try:
                     pbar.set_description(f'force_short_chunks({len(audio_chunk) / 1000:.2f}sec)')
                     # this thing might raise an error
-                    subsplits = split_on_silence(
+                    subsplits, output_ranges = split_on_silence(
                         audio_chunk,
                         min_silence_len=min_silence_len,
                         silence_thresh=silence_thresh,
                         keep_silence=1000,
                         seek_step=1,
                     )
-                    short_chunks += _force_short_chunks(subsplits, max_len, min_silence_len, silence_thresh)
+                    short_chunks += _force_short_chunks(subsplits, max_len, min_silence_len, silence_thresh, pbar=pbar)
                     break
                 except UnboundLocalError:
                     local_min_silence_len = int(round(local_min_silence_len * scaledown))
@@ -303,30 +310,31 @@ def _merge_short_segments_to_range(audio_chunks, min_len, max_len):
 
             # if connecting will be too big
             subchunks_len = sum(list(map(len, subchunks)))
-            combined_len = subchunks_len + len(next_chunk)
+            # combined_len = subchunks_len + len(next_chunk)
             i += 1
 
             # if already too big, discard
             if not (subchunks_len <= max_len):
-                pbar.set_description(f'\rthrow chunk of length {subchunks_len}')
+                # pbar.set_description(f'\rthrow chunk of length {subchunks_len}')
+                # subchunks.append(next_chunk)  # NOTE: for debugging, normally wouldn't be here
                 break
             else:  # if can merge more
-                pbar.set_description('\rappended chunk {} \t to chunks \t[{}]=\t{}'.format(
-                    len(next_chunk),
-                    '+'.join(list(map(str, map(len, subchunks)))),
-                    combined_len + len(next_chunk),
-                ))
+                # pbar.set_description('\rappended chunk {} \t to chunks \t[{}]=\t{}'.format(
+                #     len(next_chunk),
+                #     '+'.join(list(map(str, map(len, subchunks)))),
+                #     combined_len + len(next_chunk),
+                # ))
                 subchunks.append(next_chunk)
         else:  # can't add more, just merge them and move on
-            next_chunk = audio_chunks[i-1]
-            subchunks_len = sum(list(map(len, subchunks)))
-            combined_len = subchunks_len + len(next_chunk)
+            # next_chunk = audio_chunks[i - 1]
+            # subchunks_len = sum(list(map(len, subchunks)))
+            # combined_len = subchunks_len + len(next_chunk)
 
-            pbar.set_description('\rmerged chunks [{}] =\t {} E {}'.format(
-                '+'.join(list(map(str, map(len, subchunks)))),
-                combined_len,
-                (min_len, max_len)
-            ))
+            # pbar.set_description('\rmerged chunks [{}] =\t {} E {}'.format(
+            #     '+'.join(list(map(str, map(len, subchunks)))),
+            #     combined_len,
+            #     (min_len, max_len)
+            # ))
             merged_chunks.append(sum(subchunks))
     else:
         pbar.close()
@@ -343,8 +351,18 @@ def splice_using_silences(input: Path, out: Path, min_silence_len=500, silence_t
 
     print('loading audio...')
     sound_file = AudioSegment.from_file(input)
-    print('spitting...')
-    audio_chunks = split_on_silence(
+
+    # try to load an existing meta,
+    output_ranges = None
+
+    try:
+        metas = json.load(out_dir.joinpath(f'{out_parent_dir}-{filename}.meta.json').open(mode='r'))
+        output_ranges = metas['output_ranges']
+        print(f'found existing output_ranges in meta file containing {len(output_ranges)} ranges!')
+    except:
+        pass
+
+    audio_chunks, output_ranges = split_on_silence(
         sound_file,
         # must be silent for at least half a second
         min_silence_len=min_silence_len,
@@ -353,29 +371,69 @@ def splice_using_silences(input: Path, out: Path, min_silence_len=500, silence_t
         keep_silence=1000,
         seek_step=1,
         disable_tqdm=False,
+        output_ranges=output_ranges
     )
 
-    print('force_short_chunks()')
-    audio_chunks = _force_short_chunks(audio_chunks, max_len, min_silence_len, silence_thresh)
+    metas = dict(
+        output_ranges=output_ranges,
+        files=[],
+    )
 
-    print('merge_short_segments_to_range()')
+    print('\nforce_short_chunks()')
+    audio_chunks = _force_short_chunks(audio_chunks, max_len, min_silence_len, silence_thresh)
+    lens = sum(list(map(len, audio_chunks)))
+    print(
+        f'\nafter force_short_chunks: segments  / total_original: {lens}/{len(sound_file)} = {lens / len(sound_file) * 100:.2f}% kept')
+
+    # audio_chunks = [remove_leading_and_trailing_silences(chunk, silence_thresh) for chunk in tqdm(audio_chunks, 'remove_leading_and_trailing_silences')]
+    # lens = sum(list(map(len, audio_chunks)))
+    # print(f'\nafter remove_leading_and_trailing_silences: segments  / total_original: {lens}/{len(sound_file)} = {lens / len(sound_file) * 100:.2f}% kept')
+
+    # audio_chunks = [_remove_silences(chunk, min_silence_len) for chunk in tqdm(audio_chunks, '_remove_silences')]
+    # lens = sum(list(map(len, audio_chunks)))
+    # print(f'\nafter _remove_silences(): segments  / total_original: {lens}/{len(sound_file)} = {lens / len(sound_file) * 100:.2f}% kept')
+
+    # TODO: FIXME: this isn't preserving the order, later make an option to be ordered or not
+    print('\nmerge_short_segments_to_range()')
+    # merged_chunks = _merge_short_segments_to_range(
+    #     [chunk for chunk in audio_chunks if (len(chunk) < max_len)], min_len, max_len) + \
+    #         [chunk for chunk in audio_chunks if not (len(chunk) < max_len)]
     merged_chunks = _merge_short_segments_to_range(audio_chunks, min_len, max_len)
 
-    original_len = len(sound_file)
-    lens = list(map(len, merged_chunks))
-    print(f'Total_trimmed / total_original: {sum(lens)}/{original_len} = {sum(lens) / original_len * 100:.2f}%')
+    lens = sum(list(map(len, merged_chunks)))
+    postmerge_time_perc = lens / len(sound_file) * 100
+    print(
+        f'\nafter merge chunks: all segments  / total_original: {lens}/{len(sound_file)} = {postmerge_time_perc:.2f}% kept')
+
+    valid_chunks = [chunk for chunk in merged_chunks if (min_len > len(chunk) < max_len)]
+    # invalid_chunks = [chunk for chunk in merged_chunks if not (min_len > len(chunk) < max_len)]
+    invalid_chunks = [chunk for chunk in merged_chunks if not (len(chunk) < max_len)]
+
+    metas['n_files'] = len(merged_chunks),
+    metas['postmerge_time_perc'] = postmerge_time_perc,
 
     with out_dir.joinpath(f'{out_parent_dir}-{filename}.trans.txt').open(mode='w') as ftrans:
         for i, chunk in enumerate(merged_chunks):
             fmt_out_file = out_dir.joinpath(f"{out_parent_dir}-{filename}-{i:04d}.{out_fmt}")
-            if not (min_len >= len(chunk) <= max_len):
+
+            # if not in range, put in special directory
+            if not (min_len <= len(chunk) <= max_len):
                 not_in_range = fmt_out_file.parent.joinpath('not_in_range')
                 not_in_range.mkdir(exist_ok=True)
                 fmt_out_file = not_in_range.joinpath(fmt_out_file.name)
 
+            metas['files'].append({
+                'path': fmt_out_file.as_posix(),
+                'length': len(chunk),
+            })
             chunk.export(fmt_out_file, format=out_fmt)
             text = ''
             ftrans.write(f'{out_parent_dir}-{filename}-{i:04d} {text}\n')
+
+    metas['total_seconds'] = sum(f['length'] for f in metas['files'])
+    json.dump(metas,
+              out_dir.joinpath(f'{out_parent_dir}-{filename}.meta.json').open(mode='w'),
+              indent=4)
 
 
 def splice_using_subtitles(input: Path, out: Path, subtitles: Path, min_silence_len=500, silence_thresh=-16,
@@ -389,7 +447,7 @@ def splice_using_subtitles(input: Path, out: Path, subtitles: Path, min_silence_
     for dialogue in dialogues:
         dialogue.start = int(round(dialogue.start / subtitle_rescale))
         dialogue.end = int(round(dialogue.end / subtitle_rescale))
-        dialogue.text = re.sub(r'\s+', ' ', re.sub(r"[^a-zA-z']", ' ', dialogue.text)).strip()
+        dialogue.text = re.sub(r'\s+', ' ', re.sub(r"[^a-zA-z0-9': ]+", ' ', dialogue.text)).strip()
 
     for i, dialogue in enumerate(dialogues):
         next_start = dialogues[i + 1].start if i < len(dialogues) - 1 else 999999999999999
@@ -572,16 +630,15 @@ if __name__ == "__main__":
         pass
 
     # if output already exists, check user or check if forced
-    if args.out.is_dir():
-        print(f'{args.out} already exists, choose the "force" option to overwrite it.')
+    existing_files = list(args.out.glob('*[!.meta.json]'))
+    if args.out.is_dir() and existing_files:
+        print(f'{args.out} already exists and is nonempty, choose the "force" option to overwrite it.')
         if args.force or input(f'overwrite "{args.out}"? [yes/(N)o]').lower() in ['y', 'yes']:
             print('DELETING', args.out)
-            import shutil
-
-            shutil.rmtree(args.out)
+            list(map(os.remove, existing_files))
         else:
             print('exiting')
-            exit(0)
+            exit(1)
     else:
         args.out.mkdir(parents=True, exist_ok=True)
 
@@ -591,6 +648,14 @@ if __name__ == "__main__":
         print('Warning: Could not check sample using ffmpeg', e)
 
     if args.subtitles and args.subtitles.exists():
+        if args.force or input(f'WARNING: passed subtitle file does not exist "{args.subtitles}"'
+                               f'split with silences? [yes/(N)o]').lower() in ['y', 'yes']:
+            args.subtitles = None
+        else:
+            print('exiting')
+            exit(1)
+
+    if args.subtitles:
         print('splicing using subtitles')
         splice_using_subtitles(**vars(args))
     else:
