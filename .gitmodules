@@ -1,0 +1,3 @@
+[submodule "subs_audio_splicer"]
+	path = subs_audio_splicer
+	url = https://github.com/sverrod/subs-audio-splicer
