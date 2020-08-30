@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
 """
 this is just to automate splicing (splitting audio on silences or)
 resources: [](https://stackoverflow.com/a/23747395/7771202)
@@ -212,7 +214,7 @@ def _remove_silences(sound: AudioSegment, min_silence_len=500, silence_thresh=No
 
 def _check_samplerate(args):
     # check samplerate
-    out = subprocess.Popen(['ffmpeg', '-i', args.input.as_posix()],
+    out = subprocess.Popen(['ffmpeg', '-i', args.i.as_posix()],
                            stdout=subprocess.PIPE,
                            stderr=subprocess.STDOUT)
     stdout, stderr = out.communicate()
@@ -226,8 +228,8 @@ def _check_samplerate(args):
     samplerate = int(number)
     if samplerate > 16000 and \
             (args.force or input(f'Samplerate too high, create 16KHz version? [(Y)es/no]').lower() in ['n', 'no']):
-        input16khz = args.input.as_posix() + '.16KHz' + args.input.suffix
-        out = subprocess.Popen(['ffmpeg', '-i', args.input.as_posix(), '-ar', '16000', input16khz],
+        input16khz = args.i.as_posix() + '.16KHz' + args.i.suffix
+        out = subprocess.Popen(['ffmpeg', '-i', args.i.as_posix(), '-ar', '16000', input16khz],
                                stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT)
         stdout, stderr = out.communicate()
@@ -236,11 +238,11 @@ def _check_samplerate(args):
 
         print(stdout)
         if stderr or 'unable' in stdout:
-            print(f"Couldn't convert {args.input}")
+            print(f"Couldn't convert {args.i}")
             raise Exception(stderr)
         else:
-            args.input = Path(input16khz)
-            assert args.input.exists(), f'{args.input} does not exist! Failed to create 16Khz version'
+            args.i = Path(input16khz)
+            assert args.i.exists(), f'{args.i} does not exist! Failed to create 16Khz version'
 
 
 def _force_short_chunks(audio_chunks, max_len=15000, min_silence_len=500, silence_thresh=-16, scaledown=0.9,
@@ -544,7 +546,7 @@ if __name__ == "__main__":
                         'Note that it is advised to have 16000Hz audio files as input.'
                         'Gooey GUI is used if it is installed and no arguments are passed.')
 
-        parser.add_argument('-i', '--input', metavar='INPUT_AUDIO', type=Path, widget='FileChooser', required=True,
+        parser.add_argument('-i', metavar='INPUT_AUDIO', type=Path, widget='FileChooser', required=True,
                             gooey_options={
                                 'validator': {
                                     'test': 'user_input != None',
@@ -552,7 +554,7 @@ if __name__ == "__main__":
                                 }
                             },
                             help='audio file input path')
-        parser.add_argument('-o', '--out', metavar='OUT_FOLDER', type=Path, widget='DirChooser',
+        parser.add_argument('-o', metavar='OUT_FOLDER', type=Path, widget='DirChooser',
                             default='<INPUT>/splits-<ACTION>/',
                             gooey_options={
                                 'validator': {
@@ -612,17 +614,25 @@ if __name__ == "__main__":
 
     parser = get_parser()
 
+    try:
+        import argcomplete
+
+        argcomplete.autocomplete(parser)
+    except:
+        pass
+
     args = parser.parse_args(sys.argv[1:])
-    args.out = Path(
-        args.out.as_posix()
-            .replace('<INPUT>', os.path.join(*os.path.split(args.input)[:-1]))
+    args.o = Path(
+        args.o.as_posix()
+            .replace('<INPUT>', os.path.join(*os.path.split(args.i)[:-1]))
             .replace('<ACTION>', 'sub' if args.subtitles else 'sil')
     ).joinpath(
         # filename
-        '.'.join(args.input.name.split('.')[:-1])
+        '.'.join(args.i.name.split('.')[:-1])
     )
 
     try:
+        # noinspection PyUnresolvedReferences
         from utils.argutils import print_args
 
         print_args(args)
@@ -630,17 +640,17 @@ if __name__ == "__main__":
         pass
 
     # if output already exists, check user or check if forced
-    existing_files = list(args.out.glob('*[!.meta.json]'))
-    if args.out.is_dir() and existing_files:
-        print(f'{args.out} already exists and is nonempty, choose the "force" option to overwrite it.')
-        if args.force or input(f'overwrite "{args.out}"? [yes/(N)o]').lower() in ['y', 'yes']:
-            print('DELETING', args.out)
+    existing_files = list(args.o.glob('*[!.meta.json]'))
+    if args.o.is_dir() and existing_files:
+        print(f'{args.o} already exists and is nonempty, choose the "force" option to overwrite it.')
+        if args.force or input(f'overwrite "{args.o}"? [yes/(N)o]').lower() in ['y', 'yes']:
+            print('DELETING', args.o)
             list(map(os.remove, existing_files))
         else:
             print('exiting')
             exit(1)
     else:
-        args.out.mkdir(parents=True, exist_ok=True)
+        args.o.mkdir(parents=True, exist_ok=True)
 
     try:
         _check_samplerate(args)
@@ -662,4 +672,4 @@ if __name__ == "__main__":
         print('splicing using silences. You can use --subtitles')
         splice_using_silences(**vars(args))
 
-    print('saved to output directory:', args.out)
+    print('saved to output directory:', args.o)
