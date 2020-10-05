@@ -20,16 +20,18 @@ $ python splice_audio.py -i "data/$audioname.wav" --out="{INPUT}/LibriSpeech/tra
 
 import argparse
 import itertools
+import json
 import os
 import re
 import subprocess
 import sys
+from copy import deepcopy
+from multiprocessing import Pool, cpu_count
 from pathlib import Path
 
 from pydub import AudioSegment
 from pydub.utils import db_to_float
 from tqdm import tqdm
-import json
 
 
 # === pydub function ===
@@ -498,7 +500,69 @@ def splice_using_subtitles(input: Path, out: Path, subtitles: Path, min_silence_
     print(f'Segments have covered {(length / len(audio)) * 100:.2f}%')
 
 
-if __name__ == "__main__":
+def go(args):
+    method = 'sub' if args.subtitles else 'sil'
+    input_parent = os.path.join(*os.path.split(args.i)[:-1])
+    filename = '.'.join(args.i.name.split('.')[:-1])
+
+    if args.subtitles and args.subtitles.exists():
+        if args.force or input(f'WARNING: passed subtitle file does not exist "{args.subtitles}"'
+                               f'split with silences? [yes/(N)o]').lower() in ['y', 'yes']:
+            args.subtitles = None
+        else:
+            print('exiting')
+            return 1
+
+    args.o = Path(
+        args.o.as_posix().format(INPUT=input_parent,
+                                 NAME=filename,
+                                 METHOD=method,
+                                 )
+    ).joinpath(filename)
+
+    try:
+        # noinspection PyUnresolvedReferences
+        from argutils import print_args
+
+        print_args(args)
+    except:
+        pass
+
+    # if output already exists, check user or check if forced
+    existing_files = list(args.o.glob('*[!.meta.json]'))
+    if args.o.is_dir() and existing_files:
+        print(f'{args.o} already exists and is nonempty, choose the "force" option to overwrite it.')
+        if args.force or input(f'overwrite "{args.o}"? [yes/(N)o]').lower() in ['y', 'yes']:
+            print('DELETING', args.o)
+            list(map(os.remove, existing_files))
+        else:
+            print('exiting')
+            exit(1)
+    else:
+        args.o.mkdir(parents=True, exist_ok=True)
+    args.input = args.i
+    args.out = args.o
+    # check samplerate
+    try:
+        if args.samplerate > 0:
+            _check_samplerate(args)
+        else:
+            print("Skipping samplerate check.")
+    except Exception as e:
+        print('Warning: Could not check sample using ffmpeg', e)
+    # take action
+    if args.subtitles:
+        print(f'splicing "{args.i}" using subtitles')
+        splice_using_subtitles(**vars(args))
+    else:
+        print(f'splicing "{args.i}" using silences. You can use --subtitles')
+        splice_using_silences(**vars(args))
+
+    print('saved to output directory:', args.o)
+    return 0
+
+
+def main():
     try:
         import gooey
     except ImportError:
@@ -550,7 +614,7 @@ if __name__ == "__main__":
                         'Gooey GUI is used if it is installed and no arguments are passed.',
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-        parser.add_argument('-i', metavar='INPUT_AUDIO', type=Path, widget='FileChooser', required=True,
+        parser.add_argument('-i', metavar='INPUT_AUDIO', type=Path, widget='FileChooser', nargs='+', required=True,
                             gooey_options={
                                 'validator': {
                                     'test': 'user_input != None',
@@ -559,7 +623,7 @@ if __name__ == "__main__":
                             },
                             help='audio file input path')
         parser.add_argument('-o', metavar='OUT_FOLDER', type=Path, widget='DirChooser',
-                            default='{INPUT}/splits-{METHOD}/',
+                            default='{INPUT}/splits-{METHOD}',
                             gooey_options={
                                 'validator': {
                                     'test': 'user_input != None',
@@ -569,6 +633,8 @@ if __name__ == "__main__":
                             help='output directory path. '
                                  '{INPUT} means the input directory. '
                                  '{METHOD} means "sil" (silences), or "sub" (subtitles)')
+        parser.add_argument('--n_procs', default=cpu_count(), type=int,
+                            help='Multiprocessing concurrency level (best to leave at default).')
         parser.add_argument('--samplerate', default=0, type=int,
                             help='Assert target samplerate. If 0 then any samplerate is allowed.')
         # the action: either split based on .rst file, or split based on audio only
@@ -620,60 +686,24 @@ if __name__ == "__main__":
         print("INFO: failed to import `argcomplete` lib")
 
     args = parser.parse_args(sys.argv[1:])
-    args.o = Path(
-        args.o.as_posix()
-            .replace('{INPUT}', os.path.join(*os.path.split(args.i)[:-1]))
-            .replace('{METHOD}', 'sub' if args.subtitles else 'sil')
-    ).joinpath(
-        # filename
-        '.'.join(args.i.name.split('.')[:-1])
-    )
 
     try:
         # noinspection PyUnresolvedReferences
-        from utils.argutils import print_args
+        from argutils import print_args
 
         print_args(args)
     except:
         pass
 
-    # if output already exists, check user or check if forced
-    existing_files = list(args.o.glob('*[!.meta.json]'))
-    if args.o.is_dir() and existing_files:
-        print(f'{args.o} already exists and is nonempty, choose the "force" option to overwrite it.')
-        if args.force or input(f'overwrite "{args.o}"? [yes/(N)o]').lower() in ['y', 'yes']:
-            print('DELETING', args.o)
-            list(map(os.remove, existing_files))
-        else:
-            print('exiting')
-            exit(1)
-    else:
-        args.o.mkdir(parents=True, exist_ok=True)
+    args_list = []
+    for i in args.i:
+        args_clone = deepcopy(args)
+        args_clone.i = i
+        args_list.append(args_clone)
 
-    args.input = args.i
-    args.out = args.o
+    n_procs = args.n_procs
+    list(Pool(n_procs).map(go, args_list))
 
-    if args.subtitles and args.subtitles.exists():
-        if args.force or input(f'WARNING: passed subtitle file does not exist "{args.subtitles}"'
-                               f'split with silences? [yes/(N)o]').lower() in ['y', 'yes']:
-            args.subtitles = None
-        else:
-            print('exiting')
-            exit(1)
 
-    try:
-        if args.samplerate > 0:
-            _check_samplerate(args)
-        else:
-            print("Skipping samplerate check.")
-    except Exception as e:
-        print('Warning: Could not check sample using ffmpeg', e)
-
-    if args.subtitles:
-        print(f'splicing "{args.i}" using subtitles')
-        splice_using_subtitles(**vars(args))
-    else:
-        print(f'splicing "{args.i}" using silences. You can use --subtitles')
-        splice_using_silences(**vars(args))
-
-    print('saved to output directory:', args.o)
+if __name__ == "__main__":
+    main()
