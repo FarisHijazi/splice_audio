@@ -14,7 +14,7 @@ $ python splice_audio.py -f -i data/my_audio.wav --subtitles data/my_subtitles.s
 
 more extensive example: (assumes you have $audioname and $name defined)
 
-$ python splice_audio.py -i "data/$audioname.wav" --out="<INPUT>/LibriSpeech/train-$name/0" --subtitles="data/$audioname.srt" --subtitle_end_offset=200 --subtitle_rescale=1
+$ python splice_audio.py -i "data/$audioname.wav" --out="{INPUT}/LibriSpeech/train-$name/0" --subtitles="data/$audioname.srt" --subtitle_end_offset=200 --subtitle_rescale=1
 ```
 """
 
@@ -225,11 +225,13 @@ def _check_samplerate(args):
     segments = [line for line in lines if " Hz, " in line][0].split(', ')
     number = [seg for seg in segments if " Hz" in seg][0].split(' ')[0]
 
-    samplerate = int(number)
-    if samplerate > 16000 and \
-            (args.force or input(f'Samplerate too high, create 16KHz version? [(Y)es/no]').lower() in ['n', 'no']):
-        input16khz = args.i.as_posix() + '.16KHz' + args.i.suffix
-        out = subprocess.Popen(['ffmpeg', '-i', args.i.as_posix(), '-ar', '16000', input16khz],
+    input_samplerate = int(number)
+    if input_samplerate > args.samplerate and \
+            (args.force or input(
+                f'Samplerate {input_samplerate} not matching, create {args.samplerate}Hz version? [(Y)es/no]').lower() in [
+                 'n', 'no']):
+        input_resampled = args.i.as_posix() + f'.{args.samplerate}Hz' + args.i.suffix
+        out = subprocess.Popen(['ffmpeg', '-i', args.i.as_posix(), '-ar', f'{args.samplerate}', input_resampled],
                                stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT)
         stdout, stderr = out.communicate()
@@ -241,8 +243,8 @@ def _check_samplerate(args):
             print(f"Couldn't convert {args.i}")
             raise Exception(stderr)
         else:
-            args.i = Path(input16khz)
-            assert args.i.exists(), f'{args.i} does not exist! Failed to create 16Khz version'
+            args.i = Path(input_resampled)
+            assert args.i.exists(), f'{args.i} does not exist! Failed to create {args.samplerate}Hz version'
 
 
 def _force_short_chunks(audio_chunks, max_len=15000, min_silence_len=500, silence_thresh=-16, scaledown=0.9,
@@ -501,6 +503,7 @@ if __name__ == "__main__":
         import gooey
     except ImportError:
         gooey = None
+        print("INFO: Failed to import Gooey (GUI disabled)")
 
 
     def flex_add_argument(f):
@@ -544,7 +547,8 @@ if __name__ == "__main__":
                         'This is a preprocessing step for speech datasets (specifically LibriSpeech).'
                         'It can split on silences or using a subtitles file. And will generate a ".trans.txt" file.'
                         'Note that it is advised to have 16000Hz audio files as input.'
-                        'Gooey GUI is used if it is installed and no arguments are passed.')
+                        'Gooey GUI is used if it is installed and no arguments are passed.',
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
         parser.add_argument('-i', metavar='INPUT_AUDIO', type=Path, widget='FileChooser', required=True,
                             gooey_options={
@@ -555,7 +559,7 @@ if __name__ == "__main__":
                             },
                             help='audio file input path')
         parser.add_argument('-o', metavar='OUT_FOLDER', type=Path, widget='DirChooser',
-                            default='<INPUT>/splits-<ACTION>/',
+                            default='{INPUT}/splits-{METHOD}/',
                             gooey_options={
                                 'validator': {
                                     'test': 'user_input != None',
@@ -563,10 +567,10 @@ if __name__ == "__main__":
                                 }
                             },
                             help='output directory path. '
-                                 'Default="<INPUT>/splits-<ACTION>/". '
-                                 '<INPUT> means the input directory. '
-                                 '<ACTION> means "sil" (silences), or "sub" (subtitles)')
-
+                                 '{INPUT} means the input directory. '
+                                 '{METHOD} means "sil" (silences), or "sub" (subtitles)')
+        parser.add_argument('--samplerate', default=0, type=int,
+                            help='Assert target samplerate. If 0 then any samplerate is allowed.')
         # the action: either split based on .rst file, or split based on audio only
         group_subtitles = parser.add_argument_group('Subtitles')
         # read .rst file
@@ -581,28 +585,22 @@ if __name__ == "__main__":
                                           'Can specify --min_silence_len and --silence_thresh')
         group_subtitles.add_argument('--subtitle_end_offset', default=100, type=int,
                                      help='add delay at end of subtitle dialogue (milliseconds). '
-                                          'If the audio segments say more than the text, then make this smaller. '
-                                          'Default=100')
+                                          'If the audio segments say more than the text, then make this smaller. ')
 
         group_subtitles.add_argument('--subtitle_rescale', default=1.0, type=float,
                                      help='rescale the timings if the audio was rescaled.'
-                                          'If subtitle_rescale=2, then it will finish in half the original time. '
-                                          'Default=1')
+                                          'If subtitle_rescale=2, then it will finish in half the original time. ')
 
         group_silences = parser.add_argument_group('Silences')
         group_silences.add_argument('-sl', '--min_silence_len', default=700, type=int,
-                                    help='must be silent for at least MIN_SILENCE_LEN (ms) to count as a silence. '
-                                         'Default=700')
+                                    help='must be silent for at least MIN_SILENCE_LEN (ms) to count as a silence. ')
         group_silences.add_argument('-st', '--silence_thresh', default=-50, type=float,
-                                    help='consider it silent if quieter than SILENCE_THRESH dBFS. '
-                                         'Default=-50')
+                                    help='consider it silent if quieter than SILENCE_THRESH dBFS. ')
 
-        parser.add_argument('--min_len', default=7000, type=int,
-                            help='minimum length for each segment in ms. '
-                                 'Default=7000.')
+        parser.add_argument('--min_len', default=6000, type=int,
+                            help='minimum length for each segment in ms. ')
         parser.add_argument('--max_len', default=13000, type=int,
-                            help='maximum length for each segment in ms. '
-                                 'Default=13000.')
+                            help='maximum length for each segment in ms. ')
 
         parser.add_argument('--out_fmt', metavar='FILE_EXT', default='flac',
                             help='output file extension {mp3, wav, flac, ...}')
@@ -619,13 +617,13 @@ if __name__ == "__main__":
 
         argcomplete.autocomplete(parser)
     except:
-        pass
+        print("INFO: failed to import `argcomplete` lib")
 
     args = parser.parse_args(sys.argv[1:])
     args.o = Path(
         args.o.as_posix()
-            .replace('<INPUT>', os.path.join(*os.path.split(args.i)[:-1]))
-            .replace('<ACTION>', 'sub' if args.subtitles else 'sil')
+            .replace('{INPUT}', os.path.join(*os.path.split(args.i)[:-1]))
+            .replace('{METHOD}', 'sub' if args.subtitles else 'sil')
     ).joinpath(
         # filename
         '.'.join(args.i.name.split('.')[:-1])
@@ -652,10 +650,8 @@ if __name__ == "__main__":
     else:
         args.o.mkdir(parents=True, exist_ok=True)
 
-    try:
-        _check_samplerate(args)
-    except Exception as e:
-        print('Warning: Could not check sample using ffmpeg', e)
+    args.input = args.i
+    args.out = args.o
 
     if args.subtitles and args.subtitles.exists():
         if args.force or input(f'WARNING: passed subtitle file does not exist "{args.subtitles}"'
@@ -665,11 +661,19 @@ if __name__ == "__main__":
             print('exiting')
             exit(1)
 
+    try:
+        if args.samplerate > 0:
+            _check_samplerate(args)
+        else:
+            print("Skipping samplerate check.")
+    except Exception as e:
+        print('Warning: Could not check sample using ffmpeg', e)
+
     if args.subtitles:
-        print('splicing using subtitles')
+        print(f'splicing "{args.i}" using subtitles')
         splice_using_subtitles(**vars(args))
     else:
-        print('splicing using silences. You can use --subtitles')
+        print(f'splicing "{args.i}" using silences. You can use --subtitles')
         splice_using_silences(**vars(args))
 
     print('saved to output directory:', args.o)
