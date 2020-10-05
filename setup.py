@@ -26,7 +26,7 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     scripts=['splice_audio/splice_audio', 'splice_audio/splice_audio.py'],
-    python_requires='>=3.6',
-    install_requires=['tqdm', 'pydub'],
+    python_requires='>=3',
+    install_requires=['tqdm', 'pydub', 'ass', 'pysrt'],
     optional_requires=['gooey'],
 )
