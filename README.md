@@ -5,8 +5,9 @@ Audio splicer splices on subtitles or on silences
 ## Usage
 
 ```
-usage: splice_audio.py [-h] -i INPUT_AUDIO [-o OUT_FOLDER]
-                       [--samplerate SAMPLERATE] [-b SUBTITLES_FILE]
+usage: splice_audio.py [-h] -i INPUT_AUDIO [INPUT_AUDIO ...] [-o OUT_FOLDER]
+                       [--n_procs N_PROCS] [--samplerate SAMPLERATE]
+                       [-b SUBTITLES_FILE]
                        [--subtitle_end_offset SUBTITLE_END_OFFSET]
                        [--subtitle_rescale SUBTITLE_RESCALE]
                        [-sl MIN_SILENCE_LEN] [-st SILENCE_THRESH]
@@ -21,10 +22,13 @@ used if it is installed and no arguments are passed.
 
 optional arguments:
   -h, --help            show this help message and exit
-  -i INPUT_AUDIO        audio file input path (default: None)
+  -i INPUT_AUDIO [INPUT_AUDIO ...]
+                        audio file input path (default: None)
   -o OUT_FOLDER         output directory path. {INPUT} means the input
                         directory. {METHOD} means "sil" (silences), or "sub"
-                        (subtitles) (default: {INPUT}/splits-{METHOD}/)
+                        (subtitles) (default: {INPUT}/splits-{METHOD})
+  --n_procs N_PROCS     Multiprocessing concurrency level (best to leave at
+                        default). (default: 32)
   --samplerate SAMPLERATE
                         Assert target samplerate. If 0 then any samplerate is
                         allowed. (default: 0)
@@ -57,11 +61,25 @@ Silences:
   -st SILENCE_THRESH, --silence_thresh SILENCE_THRESH
                         consider it silent if quieter than SILENCE_THRESH
                         dBFS. (default: -50)
+
 ```
 
 ## Installation
 
+### pip install
+
+simply:
+
 ```shell script
+pip install git+https://github.com/FarisHijazi/splice_audio
+```
+
+### Development installation
+
+```shell script
+git clone https://github.com/FarisHijazi/splice_audio
+cd splice_audio
+
 git submodule init && git submodule update
 ```
 
@@ -72,10 +90,7 @@ pip install argcomplete
 activate-global-python-argcomplete --user
 ```
 
-
-```shell script
-git submodule add  https://github.com/sverrod/subs-audio-splicer subs_audio_splicer
-```
+trying to install wxpython for linux (but these commands don't work yet, feel free to suggest ones that do)
 
 ```shell script
 sudo add-apt-repository ppa:swt-techie/wxpython4
