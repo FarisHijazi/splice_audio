@@ -2,6 +2,42 @@
 
 Audio splicer splices on subtitles or on silences
 
+## Installation
+
+### pip install
+
+simply:
+
+```shell script
+pip install git+https://github.com/FarisHijazi/splice_audio
+```
+
+### Development installation (optional)
+
+This repo does use another repository as a submodule: https://github.com/sverrod/subs-audio-splicer
+
+```shell script
+git clone https://github.com/FarisHijazi/splice_audio
+cd splice_audio
+
+git submodule init && git submodule update
+```
+
+Installing autocomplete (optional)
+
+```shell script
+pip install argcomplete
+activate-global-python-argcomplete --user
+```
+
+trying to install wxpython for linux (but these commands don't work yet, feel free to suggest ones that do)
+
+```shell script
+sudo add-apt-repository ppa:swt-techie/wxpython4
+sudo apt-get update
+sudo apt-get install python3-wxgtk4.0
+```
+
 ## Usage
 
 ```
@@ -17,8 +53,7 @@ usage: splice_audio.py [-h] -i INPUT_AUDIO [INPUT_AUDIO ...] [-o OUT_FOLDER]
 Given a single sound file, tries to split it to segments.This is a
 preprocessing step for speech datasets (specifically LibriSpeech).It can split
 on silences or using a subtitles file. And will generate a ".trans.txt"
-file.Note that it is advised to have 16000Hz audio files as input.Gooey GUI is
-used if it is installed and no arguments are passed.
+file.Gooey GUI is used if it is installed and no arguments are passed.
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -50,9 +85,11 @@ Subtitles:
                         If the audio segments say more than the text, then
                         make this smaller. (default: 100)
   --subtitle_rescale SUBTITLE_RESCALE
-                        rescale the timings if the audio was rescaled.If
-                        subtitle_rescale=2, then it will finish in half the
-                        original time. (default: 1.0)
+                        rescale the timings if the audio was rescaled
+                        (stretched).Example1: If subtitle_rescale=2, then it
+                        will finish in half the original time.Example2: If the
+                        subtitle dialogues are ahead (appear earlier) of the
+                        audio, increase subtitle_rescale. (default: 1.0)
 
 Silences:
   -sl MIN_SILENCE_LEN, --min_silence_len MIN_SILENCE_LEN
@@ -64,36 +101,6 @@ Silences:
 
 ```
 
-## Installation
+Uses Gooey graphical interface (if installed).
 
-### pip install
-
-simply:
-
-```shell script
-pip install git+https://github.com/FarisHijazi/splice_audio
-```
-
-### Development installation
-
-```shell script
-git clone https://github.com/FarisHijazi/splice_audio
-cd splice_audio
-
-git submodule init && git submodule update
-```
-
-Installing autocomplete (optional)
-
-```shell script
-pip install argcomplete
-activate-global-python-argcomplete --user
-```
-
-trying to install wxpython for linux (but these commands don't work yet, feel free to suggest ones that do)
-
-```shell script
-sudo add-apt-repository ppa:swt-techie/wxpython4
-sudo apt-get update
-sudo apt-get install python3-wxgtk4.0
-```
+![](audio_splicer_gui.png)

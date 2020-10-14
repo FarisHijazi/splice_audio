@@ -1,10 +1,25 @@
 #!/usr/bin/env python
+from sys import platform
 
 import setuptools
 from distutils.core import setup
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
+
+requirements = ['tqdm', 'pydub', 'ass', 'pysrt', 'argcomplete']
+
+
+if platform == "linux" or platform == "linux2":
+    # linux
+    pass
+elif platform == "darwin":
+    # OS X
+    pass
+elif platform == "win32":
+    # Windows...
+    requirements += ['gooey']
+
 
 setuptools.setup(
     name="splice_audio",  # Replace with your own username
@@ -27,6 +42,6 @@ setuptools.setup(
     ],
     scripts=['splice_audio/splice_audio', 'splice_audio/splice_audio.py'],
     python_requires='>=3',
-    install_requires=['tqdm', 'pydub', 'ass', 'pysrt'],
-    optional_requires=['gooey'],
+    install_requires=requirements,
+    # extras_require={"": ['gooey', 'argcomplete']},
 )

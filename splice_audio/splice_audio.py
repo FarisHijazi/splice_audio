@@ -351,7 +351,7 @@ def _merge_short_segments_to_range(audio_chunks, min_len, max_len):
 
 def splice_using_silences(input: Path, out: Path, min_silence_len=500, silence_thresh=-16, out_fmt='flac', min_len=7000,
                           max_len=15000, **kwargs):
-    filename = out.name
+    filename = out.name.replace(' ', '-')
     out_parent_dir = out.parent.name
     out_dir = out
 
@@ -434,7 +434,7 @@ def splice_using_silences(input: Path, out: Path, min_silence_len=500, silence_t
             })
             chunk.export(fmt_out_file, format=out_fmt)
             text = ''
-            ftrans.write(f'{out_parent_dir}-{filename}-{i:04d} {text}\n')
+            ftrans.write(f'{filename}-{i:04d} {text}\n')
 
     metas['total_seconds'] = sum(f['length'] for f in metas['files'])
     json.dump(metas,
@@ -459,7 +459,7 @@ def splice_using_subtitles(input: Path, out: Path, subtitles: Path, min_silence_
         next_start = dialogues[i + 1].start if i < len(dialogues) - 1 else 999999999999999
         dialogue.start, dialogue.end = dialogue.start, min(next_start, dialogue.end) + subtitle_end_offset
 
-    filename = out.name
+    filename = out.name.replace(' ', '-')
     out_parent_dir = out.parent.name
     out_dir = out
 
@@ -492,18 +492,20 @@ def splice_using_subtitles(input: Path, out: Path, subtitles: Path, min_silence_
             length += len(chunk)
 
             text = dialogue.text.replace('\n', ' ').upper()
-            ftrans.write(f'{out_parent_dir}-{filename}-{i:04d} {text}\n')
+            ftrans.write(f'{filename}-{i:04d} {text}\n')
 
             # formatted outfile
-            fmt_out_file = out_dir.joinpath(f"{out_parent_dir}-{filename}-{i:04d}.{out_fmt}")
+            fmt_out_file = out_dir.joinpath(f"{filename}-{i:04d}.{out_fmt}".replace(' ', '-'))
             chunk.export(fmt_out_file, format=out_fmt)
     print(f'Segments have covered {(length / len(audio)) * 100:.2f}%')
 
 
 def go(args):
+    print('args', args)
     method = 'sub' if args.subtitles else 'sil'
-    input_parent = os.path.join(*os.path.split(args.i)[:-1])
+    input_parent = args.i.parent
     filename = '.'.join(args.i.name.split('.')[:-1])
+    args.out_fmt = args.out_fmt or args.i.name.split('.')[-1]
 
     if args.subtitles and args.subtitles.exists():
         if args.force or input(f'WARNING: passed subtitle file does not exist "{args.subtitles}"'
@@ -512,6 +514,8 @@ def go(args):
         else:
             print('exiting')
             return 1
+
+    print('variables:', {'{INPUT}': input_parent, '{NAME}': filename, '{METHOD}': method})
 
     args.o = Path(
         args.o.as_posix().format(INPUT=input_parent,
@@ -530,16 +534,17 @@ def go(args):
 
     # if output already exists, check user or check if forced
     existing_files = list(args.o.glob('*[!.meta.json]'))
-    if args.o.is_dir() and existing_files:
-        print(f'{args.o} already exists and is nonempty, choose the "force" option to overwrite it.')
-        if args.force or input(f'overwrite "{args.o}"? [yes/(N)o]').lower() in ['y', 'yes']:
+    if not args.child and args.o.is_dir() and existing_files:
+        print(f'{args.o} already exists and is nonempty, choose the "--force" option to overwrite it.')
+        if (args.force or input(f'overwrite "{args.o}"? [yes/(N)o]').lower() in ['y', 'yes']):
             print('DELETING', args.o)
             list(map(os.remove, existing_files))
         else:
             print('exiting')
-            exit(1)
+            return 1
     else:
         args.o.mkdir(parents=True, exist_ok=True)
+
     args.input = args.i
     args.out = args.o
     # check samplerate
@@ -569,7 +574,6 @@ def main():
         gooey = None
         print("INFO: Failed to import Gooey (GUI disabled)")
 
-
     def flex_add_argument(f):
         """Make the add_argument accept (and ignore) the widget option."""
 
@@ -580,14 +584,12 @@ def main():
 
         return f_decorated
 
-
     # Monkey-patching a private class…
     argparse._ActionsContainer.add_argument = flex_add_argument(argparse.ArgumentParser.add_argument)
 
     # Do not run GUI if it is not available or if command-line arguments are given.
     if gooey is None or len(sys.argv) > 1:
         ArgumentParser = argparse.ArgumentParser
-
 
         def gui_decorator(f):
             return f
@@ -603,18 +605,16 @@ def main():
         # in gooey mode, --force is always set
         sys.argv.append('--force')
 
-
     @gui_decorator
     def get_parser():
         parser = ArgumentParser(
             description='Given a single sound file, tries to split it to segments.'
                         'This is a preprocessing step for speech datasets (specifically LibriSpeech).'
                         'It can split on silences or using a subtitles file. And will generate a ".trans.txt" file.'
-                        'Note that it is advised to have 16000Hz audio files as input.'
                         'Gooey GUI is used if it is installed and no arguments are passed.',
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-        parser.add_argument('-i', metavar='INPUT_AUDIO', type=Path, widget='FileChooser', nargs='+', required=True,
+        parser.add_argument('-i', metavar='INPUT_AUDIO', type=Path, widget='FileChooser', nargs='+',
                             gooey_options={
                                 'validator': {
                                     'test': 'user_input != None',
@@ -654,8 +654,9 @@ def main():
                                           'If the audio segments say more than the text, then make this smaller. ')
 
         group_subtitles.add_argument('--subtitle_rescale', default=1.0, type=float,
-                                     help='rescale the timings if the audio was rescaled.'
-                                          'If subtitle_rescale=2, then it will finish in half the original time. ')
+                                     help='rescale the timings if the audio was rescaled (stretched).'
+                                          'Example1: If subtitle_rescale=2, then it will finish in half the original time.'
+                                          'Example2: If the subtitle dialogues are ahead (appear earlier) of the audio, increase subtitle_rescale.')
 
         group_silences = parser.add_argument_group('Silences')
         group_silences.add_argument('-sl', '--min_silence_len', default=700, type=int,
@@ -668,24 +669,29 @@ def main():
         parser.add_argument('--max_len', default=13000, type=int,
                             help='maximum length for each segment in ms. ')
 
-        parser.add_argument('--out_fmt', metavar='FILE_EXT', default='flac',
-                            help='output file extension {mp3, wav, flac, ...}')
+        parser.add_argument('--out_fmt', metavar='FILE_EXT', default='',
+                            help='output file extension {"", mp3, wav, flac, ...}. Empty means same as input')
 
         parser.add_argument('-f', '--force', action='store_true',
                             help='Overwrite if output already exists')
         return parser
 
-
     parser = get_parser()
 
     try:
         import argcomplete
-
         argcomplete.autocomplete(parser)
     except:
         print("INFO: failed to import `argcomplete` lib")
 
     args = parser.parse_args(sys.argv[1:])
+
+    # expand directory
+    input_dir = args.i[0]
+    if len(args.i) == 1 and input_dir.is_dir():
+        args.i = list(input_dir.rglob('*.mp3'))
+        assert len(args.i) > 0, 'No mp3 files found in input directory:'
+        print('input is a folder, found mp3 files:', args.i)
 
     try:
         # noinspection PyUnresolvedReferences
@@ -695,14 +701,18 @@ def main():
     except:
         pass
 
+    # make args for each input file
     args_list = []
     for i in args.i:
         args_clone = deepcopy(args)
         args_clone.i = i
+        args_clone.child = len(args.i) > 1
         args_list.append(args_clone)
 
     n_procs = args.n_procs
-    list(Pool(n_procs).map(go, args_list))
+    ret_codes = list(Pool(n_procs).map(go, args_list))
+
+    return max(ret_codes)
 
 
 if __name__ == "__main__":
