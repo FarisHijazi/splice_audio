@@ -104,3 +104,9 @@ Silences:
 Uses Gooey graphical interface (if installed).
 
 ![](audio_splicer_gui.png)
+
+## Known issues
+
+- gitsubmodule error `ERROR: Command errored out with exit status 128: git submodule update --init --recursive -q Check the logs for full command output.` Still working on the fix.
+- issues with Windows install including Gooey. Solution: pip install it manually
+
