@@ -420,7 +420,7 @@ def splice_using_silences(input: Path, out: Path, min_silence_len=500, silence_t
 
     with out_dir.joinpath(f'{out_parent_dir}-{filename}.trans.txt').open(mode='w') as ftrans:
         for i, chunk in enumerate(merged_chunks):
-            fmt_out_file = out_dir.joinpath(f"{out_parent_dir}-{filename}-{i:04d}.{out_fmt}")
+            fmt_out_file = out_dir.joinpath(f"{out_parent_dir}-{filename}-seg{i:04d}.{out_fmt}")
 
             # if not in range, put in special directory
             if not (min_len <= len(chunk) <= max_len):
@@ -434,7 +434,7 @@ def splice_using_silences(input: Path, out: Path, min_silence_len=500, silence_t
             })
             chunk.export(fmt_out_file, format=out_fmt)
             text = ''
-            ftrans.write(f'{filename}-{i:04d} {text}\n')
+            ftrans.write(f'{filename}-seg{i:04d} {text}\n')
 
     metas['total_seconds'] = sum(f['length'] for f in metas['files'])
     json.dump(metas,
@@ -492,10 +492,10 @@ def splice_using_subtitles(input: Path, out: Path, subtitles: Path, min_silence_
             length += len(chunk)
 
             text = dialogue.text.replace('\n', ' ').upper()
-            ftrans.write(f'{filename}-{i:04d} {text}\n')
+            ftrans.write(f'{filename}-seg{i:04d} {text}\n')
 
             # formatted outfile
-            fmt_out_file = out_dir.joinpath(f"{filename}-{i:04d}.{out_fmt}".replace(' ', '-'))
+            fmt_out_file = out_dir.joinpath(f"{filename}-seg{i:04d}.{out_fmt}".replace(' ', '-'))
             chunk.export(fmt_out_file, format=out_fmt)
     print(f'Segments have covered {(length / len(audio)) * 100:.2f}%')
 
@@ -614,7 +614,7 @@ def main():
                         'Gooey GUI is used if it is installed and no arguments are passed.',
             formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 
-        parser.add_argument('-i', metavar='INPUT_AUDIO', type=Path, widget='FileChooser', nargs='+',
+        parser.add_argument('-i', '--i', metavar='INPUT_AUDIO', type=Path, widget='FileChooser', nargs='+',
                             gooey_options={
                                 'validator': {
                                     'test': 'user_input != None',
@@ -622,7 +622,7 @@ def main():
                                 }
                             },
                             help='audio file input path')
-        parser.add_argument('-o', metavar='OUT_FOLDER', type=Path, widget='DirChooser',
+        parser.add_argument('-o', '--o', metavar='OUT_FOLDER', type=Path, widget='DirChooser',
                             default='{INPUT}/splits-{METHOD}',
                             gooey_options={
                                 'validator': {
@@ -716,4 +716,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

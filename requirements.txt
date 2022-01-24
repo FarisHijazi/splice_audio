@@ -1,0 +1,5 @@
+tqdm
+pydub
+ass
+pysrt
+argcomplete

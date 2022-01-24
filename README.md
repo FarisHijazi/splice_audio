@@ -23,6 +23,8 @@ cd splice_audio
 git submodule init && git submodule update
 ```
 
+#### Optional installs
+
 Installing autocomplete (optional)
 
 ```shell script
@@ -41,7 +43,7 @@ sudo apt-get install python3-wxgtk4.0
 ## Usage
 
 ```
-usage: splice_audio.py [-h] -i INPUT_AUDIO [INPUT_AUDIO ...] [-o OUT_FOLDER]
+usage: splice_audio    [-h] -i INPUT_AUDIO [INPUT_AUDIO ...] [-o OUT_FOLDER]
                        [--n_procs N_PROCS] [--samplerate SAMPLERATE]
                        [-b SUBTITLES_FILE]
                        [--subtitle_end_offset SUBTITLE_END_OFFSET]

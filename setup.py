@@ -3,11 +3,13 @@ from sys import platform
 
 import setuptools
 from distutils.core import setup
+import glob
 
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
-requirements = ['tqdm', 'pydub', 'ass', 'pysrt', 'argcomplete']
+with open("requirements.txt", "r") as fh:
+    requirements = list(map(str.strip, filter(None, fh.readlines())))
 
 
 if platform == "linux" or platform == "linux2":
@@ -20,7 +22,10 @@ elif platform == "win32":
     # Windows...
     requirements += ['gooey']
 
-
+scripts = (glob.glob('splice_audio/*.py') + glob.glob('splice_audio/*/*.py') +
+           glob.glob('subs_audio_splicer/*.py') + glob.glob('subs_audio_splicer/*/*.py')
+)
+print('scripts', scripts)
 setuptools.setup(
     name="splice_audio",  # Replace with your own username
     version="1.0",
@@ -40,7 +45,12 @@ setuptools.setup(
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
-    scripts=['splice_audio/splice_audio', 'splice_audio/splice_audio.py'],
+    scripts=scripts,
+    entry_points={
+        'console_scripts': [
+            'splice_audio=splice_audio:main',
+        ]
+    },
     python_requires='>=3',
     install_requires=requirements,
     # extras_require={"": ['gooey', 'argcomplete']},
