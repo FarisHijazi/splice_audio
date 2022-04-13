@@ -1,3 +1,0 @@
-pydub
-pysrt
-ass
