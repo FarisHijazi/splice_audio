@@ -22,9 +22,7 @@ elif platform == "win32":
     # Windows...
     requirements += ['gooey']
 
-scripts = (glob.glob('splice_audio/*.py') + glob.glob('splice_audio/*/*.py') +
-           glob.glob('subs_audio_splicer/*.py') + glob.glob('subs_audio_splicer/*/*.py')
-)
+scripts = glob.glob('splice_audio/*.py') + glob.glob('splice_audio/*/*.py')
 print('scripts', scripts)
 setuptools.setup(
     name="splice_audio",  # Replace with your own username

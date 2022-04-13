@@ -14,13 +14,10 @@ pip install git+https://github.com/FarisHijazi/splice_audio
 
 ### Development installation (optional)
 
-This repo does use another repository as a submodule: https://github.com/sverrod/subs-audio-splicer
+This repo does use another repository: https://github.com/sverrod/subs-audio-splicer
 
 ```shell script
 git clone https://github.com/FarisHijazi/splice_audio
-cd splice_audio
-
-git submodule init && git submodule update
 ```
 
 #### Optional installs
